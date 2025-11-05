@@ -95,6 +95,29 @@ async fn streaming() {
     }
 }
 
+#[tokio::test]
+async fn zipslip_sanitized_name() {
+    corpus::install_test_subscriber();
+
+    let file = Arc::new(RandomAccessFile::open(zips_dir().join("zipslip.zip")).unwrap());
+    let archive = file.read_zip().await.unwrap();
+    let slip_file = archive.entries().next().unwrap();
+
+    assert_eq!(slip_file.name, "../readme.notzip");
+    assert_eq!(slip_file.sanitized_name(), None);
+}
+
+#[tokio::test]
+async fn good_sanitized_name() {
+    corpus::install_test_subscriber();
+
+    let file = Arc::new(RandomAccessFile::open(zips_dir().join("test.zip")).unwrap());
+    let archive = file.read_zip().await.unwrap();
+    let e = archive.entries().next().unwrap();
+
+    assert_eq!(e.name, e.sanitized_name().unwrap());
+}
+
 // This helps find bugs in state machines!
 
 struct OneByteReadWrapper<R>(R);

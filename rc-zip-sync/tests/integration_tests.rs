@@ -97,6 +97,29 @@ fn streaming() {
     }
 }
 
+#[test]
+fn zipslip_sanitized_name() {
+    corpus::install_test_subscriber();
+
+    let file = File::open(zips_dir().join("zipslip.zip")).unwrap();
+    let archive = file.read_zip().unwrap();
+    let slip_file = archive.entries().next().unwrap();
+
+    assert_eq!(slip_file.name, "../readme.notzip");
+    assert_eq!(slip_file.sanitized_name(), None);
+}
+
+#[test]
+fn good_sanitized_name() {
+    corpus::install_test_subscriber();
+
+    let file = File::open(zips_dir().join("test.zip")).unwrap();
+    let archive = file.read_zip().unwrap();
+    let e = archive.entries().next().unwrap();
+
+    assert_eq!(e.name, e.sanitized_name().unwrap());
+}
+
 // This helps find bugs in state machines!
 
 struct OneByteReadWrapper<R>(R);
