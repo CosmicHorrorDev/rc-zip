@@ -283,9 +283,8 @@ fn extract_entry(
         EntryKind::File => {
             let mut entry_writer = File::create(path)?;
             let before_entry_bytes = stats.uncompressed_size;
-            let total = entry.uncompressed_size;
-            let mut progress_reader = ProgressReader::new(entry_reader, total, |prog| {
-                pbar.set_position(before_entry_bytes + prog.done);
+            let mut progress_reader = ProgressReader::new(entry_reader, |progress| {
+                pbar.set_position(before_entry_bytes + progress);
             });
 
             let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
@@ -344,33 +343,18 @@ impl Stats {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Progress {
-    done: u64,
-    #[allow(unused)]
-    total: u64,
-}
-
-struct ProgressReader<F, R>
-where
-    R: io::Read,
-    F: Fn(Progress),
-{
+struct ProgressReader<F, R> {
     inner: R,
     callback: F,
-    progress: Progress,
+    progress: u64,
 }
 
-impl<F, R> ProgressReader<F, R>
-where
-    R: io::Read,
-    F: Fn(Progress),
-{
-    fn new(inner: R, total: u64, callback: F) -> Self {
+impl<F, R> ProgressReader<F, R> {
+    fn new(inner: R, callback: F) -> Self {
         Self {
             inner,
             callback,
-            progress: Progress { total, done: 0 },
+            progress: 0,
         }
     }
 }
@@ -378,12 +362,12 @@ where
 impl<F, R> io::Read for ProgressReader<F, R>
 where
     R: io::Read,
-    F: Fn(Progress),
+    F: Fn(u64),
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let res = self.inner.read(buf);
         if let Ok(n) = res {
-            self.progress.done += n as u64;
+            self.progress += n as u64;
             (self.callback)(self.progress);
         }
         res
