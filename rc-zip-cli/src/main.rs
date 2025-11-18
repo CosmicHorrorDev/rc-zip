@@ -76,26 +76,23 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
         let mut reader_versions = HashSet::new();
         let mut methods = HashSet::new();
-        let mut compressed_size: u64 = 0;
-        let mut uncompressed_size: u64 = 0;
-        let mut num_dirs = 0;
-        let mut num_symlinks = 0;
-        let mut num_files = 0;
+        let mut compressed_size = 0;
+        let mut stats = Stats::default();
 
         for entry in archive.entries() {
             reader_versions.insert(entry.reader_version);
             match entry.kind() {
                 EntryKind::Symlink => {
-                    num_symlinks += 1;
+                    stats.num_symlinks += 1;
                 }
                 EntryKind::Directory => {
-                    num_dirs += 1;
+                    stats.num_dirs += 1;
                 }
                 EntryKind::File => {
                     methods.insert(entry.method);
-                    num_files += 1;
+                    stats.num_files += 1;
                     compressed_size += entry.compressed_size;
-                    uncompressed_size += entry.uncompressed_size;
+                    stats.uncompressed_size += entry.uncompressed_size;
                 }
             }
         }
@@ -103,11 +100,11 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         println!("Encoding: {}, Methods: {:?}", archive.encoding(), methods);
         println!(
             "{} ({:.2}% compression) ({} files, {} dirs, {} symlinks)",
-            format_size(uncompressed_size, BINARY),
-            compressed_size as f64 / uncompressed_size as f64 * 100.0,
-            num_files,
-            num_dirs,
-            num_symlinks,
+            format_size(stats.uncompressed_size, BINARY),
+            compressed_size as f64 / stats.uncompressed_size as f64 * 100.0,
+            stats.num_files,
+            stats.num_dirs,
+            stats.num_symlinks,
         );
     }
 
@@ -164,15 +161,12 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let dir = PathBuf::from(dir.unwrap_or_else(|| ".".into()));
             let reader = zipfile.read_zip()?;
 
-            let mut num_dirs = 0;
-            let mut num_files = 0;
-            let mut num_symlinks = 0;
+            let mut stats = Stats::default();
             let uncompressed_size = reader
                 .entries()
                 .map(|entry| entry.uncompressed_size)
-                .sum::<u64>();
+                .sum();
 
-            let mut done_bytes: u64 = 0;
             let pbar = ProgressBar::new(uncompressed_size);
             pbar.set_style(
                 ProgressStyle::default_bar()
@@ -197,7 +191,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 )?;
                 match entry.kind() {
                     EntryKind::Symlink => {
-                        num_symlinks += 1;
+                        stats.num_symlinks += 1;
 
                         cfg_if! {
                             if #[cfg(windows)] {
@@ -223,20 +217,20 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     EntryKind::Directory => {
-                        num_dirs += 1;
+                        stats.num_dirs += 1;
                     }
                     EntryKind::File => {
-                        num_files += 1;
+                        stats.num_files += 1;
                         let mut entry_writer = File::create(path)?;
                         let entry_reader = entry.reader();
-                        let before_entry_bytes = done_bytes;
+                        let before_entry_bytes = stats.uncompressed_size;
                         let mut progress_reader =
                             ProgressReader::new(entry_reader, entry.uncompressed_size, |prog| {
                                 pbar.set_position(before_entry_bytes + prog.done);
                             });
 
                         let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
-                        done_bytes += copied_bytes;
+                        stats.uncompressed_size += copied_bytes;
                     }
                 }
             }
@@ -244,24 +238,21 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let duration = start_time.elapsed()?;
             println!(
                 "Extracted {} (in {} files, {} dirs, {} symlinks)",
-                format_size(uncompressed_size, BINARY),
-                num_files,
-                num_dirs,
-                num_symlinks
+                format_size(stats.uncompressed_size, BINARY),
+                stats.num_files,
+                stats.num_dirs,
+                stats.num_symlinks
             );
             let seconds = (duration.as_millis() as f64) / 1000.0;
-            let bps = (uncompressed_size as f64 / seconds) as u64;
+            let bps = (stats.uncompressed_size as f64 / seconds) as u64;
             println!("Overall extraction speed: {} / s", format_size(bps, BINARY));
         }
         Commands::UnzipStreaming { zipfile, dir, .. } => {
             let zipfile = File::open(zipfile)?;
             let dir = PathBuf::from(dir.unwrap_or_else(|| ".".into()));
 
-            let mut num_dirs = 0;
-            let mut num_files = 0;
-            let mut num_symlinks = 0;
+            let mut stats = Stats::default();
 
-            let mut done_bytes: u64 = 0;
             let pbar = ProgressBar::new(100);
             pbar.set_style(
                 ProgressStyle::default_bar()
@@ -270,7 +261,6 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     .progress_chars("=>-"),
             );
 
-            let mut uncompressed_size = 0;
             pbar.enable_steady_tick(Duration::from_millis(125));
 
             let start_time = std::time::SystemTime::now();
@@ -289,7 +279,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 )?;
                 match entry_reader.entry().kind() {
                     EntryKind::Symlink => {
-                        num_symlinks += 1;
+                        stats.num_symlinks += 1;
 
                         cfg_if! {
                             if #[cfg(windows)] {
@@ -314,12 +304,12 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     EntryKind::Directory => {
-                        num_dirs += 1;
+                        stats.num_dirs += 1;
                     }
                     EntryKind::File => {
-                        num_files += 1;
+                        stats.num_files += 1;
                         let mut entry_writer = File::create(path)?;
-                        let before_entry_bytes = done_bytes;
+                        let before_entry_bytes = stats.uncompressed_size;
                         let total = entry_reader.entry().uncompressed_size;
                         let mut progress_reader =
                             ProgressReader::new(entry_reader, total, |prog| {
@@ -327,8 +317,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                             });
 
                         let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
-                        uncompressed_size += copied_bytes;
-                        done_bytes += copied_bytes;
+                        stats.uncompressed_size += copied_bytes;
                         entry_reader = progress_reader.into_inner();
                     }
                 }
@@ -343,13 +332,13 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let duration = start_time.elapsed()?;
             println!(
                 "Extracted {} (in {} files, {} dirs, {} symlinks)",
-                format_size(uncompressed_size, BINARY),
-                num_files,
-                num_dirs,
-                num_symlinks
+                format_size(stats.uncompressed_size, BINARY),
+                stats.num_files,
+                stats.num_dirs,
+                stats.num_symlinks
             );
             let seconds = (duration.as_millis() as f64) / 1000.0;
-            let bps = (uncompressed_size as f64 / seconds) as u64;
+            let bps = (stats.uncompressed_size as f64 / seconds) as u64;
             println!("Overall extraction speed: {} / s", format_size(bps, BINARY));
         }
     }
@@ -385,6 +374,14 @@ impl Truncate for String {
             }
         }
     }
+}
+
+#[derive(Default)]
+struct Stats {
+    num_files: u32,
+    num_dirs: u32,
+    num_symlinks: u32,
+    uncompressed_size: u64,
 }
 
 #[derive(Clone, Copy)]
