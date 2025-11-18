@@ -190,7 +190,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let bps = (stats.uncompressed_size as f64 / seconds) as u64;
             println!("Overall extraction speed: {} / s", format_size(bps, BINARY));
         }
-        Commands::UnzipStreaming { zipfile, dir, .. } => {
+        Commands::UnzipStreaming { zipfile, dir } => {
             let zipfile = File::open(zipfile)?;
             let dir = PathBuf::from(dir.unwrap_or_else(|| ".".into()));
 
