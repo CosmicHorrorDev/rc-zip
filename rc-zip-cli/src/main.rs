@@ -1,7 +1,8 @@
 use cfg_if::cfg_if;
 use clap::{Parser, Subcommand};
 use humansize::{format_size, BINARY};
-use rc_zip::parse::{Archive, EntryKind, Method, Version};
+use indicatif::{ProgressBar, ProgressStyle};
+use rc_zip::parse::{Archive, EntryKind};
 use rc_zip_sync::{ReadZip, ReadZipStreaming};
 
 use std::{
@@ -23,19 +24,6 @@ where
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(x) = self.0.as_ref() {
             write!(f, "{}", x)
-        } else {
-            write!(f, "∅")
-        }
-    }
-}
-
-impl<T> fmt::Debug for Optional<T>
-where
-    T: fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(x) = self.0.as_ref() {
-            write!(f, "{:?}", x)
         } else {
             write!(f, "∅")
         }
@@ -86,8 +74,8 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             println!("Comment:\n{}", archive.comment());
         }
 
-        let mut reader_versions = HashSet::<Version>::new();
-        let mut methods = HashSet::<Method>::new();
+        let mut reader_versions = HashSet::new();
+        let mut methods = HashSet::new();
         let mut compressed_size: u64 = 0;
         let mut uncompressed_size: u64 = 0;
         let mut num_dirs = 0;
@@ -185,7 +173,6 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .sum::<u64>();
 
             let mut done_bytes: u64 = 0;
-            use indicatif::{ProgressBar, ProgressStyle};
             let pbar = ProgressBar::new(uncompressed_size);
             pbar.set_style(
                 ProgressStyle::default_bar()
@@ -198,32 +185,26 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let start_time = std::time::SystemTime::now();
             for entry in reader.entries() {
-                let entry_name = match entry.sanitized_name() {
-                    Some(name) => name,
-                    None => continue,
+                let Some(entry_name) = entry.sanitized_name() else {
+                    continue;
                 };
 
                 pbar.set_message(entry_name.to_string());
+                let path = dir.join(entry_name);
+                std::fs::create_dir_all(
+                    path.parent()
+                        .expect("all full entry paths should have parent paths"),
+                )?;
                 match entry.kind() {
                     EntryKind::Symlink => {
                         num_symlinks += 1;
 
                         cfg_if! {
                             if #[cfg(windows)] {
-                                let path = dir.join(entry_name);
-                                std::fs::create_dir_all(
-                                    path.parent()
-                                        .expect("all full entry paths should have parent paths"),
-                                )?;
                                 let mut entry_writer = File::create(path)?;
                                 let mut entry_reader = entry.reader();
                                 std::io::copy(&mut entry_reader, &mut entry_writer)?;
                             } else {
-                                let path = dir.join(entry_name);
-                                std::fs::create_dir_all(
-                                    path.parent()
-                                        .expect("all full entry paths should have parent paths"),
-                                )?;
                                 if let Ok(metadata) = std::fs::symlink_metadata(&path) {
                                     if metadata.is_file() {
                                         std::fs::remove_file(&path)?;
@@ -243,19 +224,9 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     EntryKind::Directory => {
                         num_dirs += 1;
-                        let path = dir.join(entry_name);
-                        std::fs::create_dir_all(
-                            path.parent()
-                                .expect("all full entry paths should have parent paths"),
-                        )?;
                     }
                     EntryKind::File => {
                         num_files += 1;
-                        let path = dir.join(entry_name);
-                        std::fs::create_dir_all(
-                            path.parent()
-                                .expect("all full entry paths should have parent paths"),
-                        )?;
                         let mut entry_writer = File::create(path)?;
                         let entry_reader = entry.reader();
                         let before_entry_bytes = done_bytes;
@@ -265,7 +236,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                             });
 
                         let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
-                        done_bytes = before_entry_bytes + copied_bytes;
+                        done_bytes += copied_bytes;
                     }
                 }
             }
@@ -291,7 +262,6 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let mut num_symlinks = 0;
 
             let mut done_bytes: u64 = 0;
-            use indicatif::{ProgressBar, ProgressStyle};
             let pbar = ProgressBar::new(100);
             pbar.set_style(
                 ProgressStyle::default_bar()
@@ -307,31 +277,25 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let mut entry_reader = zipfile.stream_zip_entries_throwing_caution_to_the_wind()?;
             loop {
-                let entry_name = match entry_reader.entry().sanitized_name() {
-                    Some(name) => name,
-                    None => continue,
+                let Some(entry_name) = entry_reader.entry().sanitized_name() else {
+                    continue;
                 };
 
                 pbar.set_message(entry_name.to_string());
+                let path = dir.join(entry_name);
+                std::fs::create_dir_all(
+                    path.parent()
+                        .expect("all full entry paths should have parent paths"),
+                )?;
                 match entry_reader.entry().kind() {
                     EntryKind::Symlink => {
                         num_symlinks += 1;
 
                         cfg_if! {
                             if #[cfg(windows)] {
-                                let path = dir.join(entry_name);
-                                std::fs::create_dir_all(
-                                    path.parent()
-                                        .expect("all full entry paths should have parent paths"),
-                                )?;
                                 let mut entry_writer = File::create(path)?;
                                 std::io::copy(&mut entry_reader, &mut entry_writer)?;
                             } else {
-                                let path = dir.join(entry_name);
-                                std::fs::create_dir_all(
-                                    path.parent()
-                                        .expect("all full entry paths should have parent paths"),
-                                )?;
                                 if let Ok(metadata) = std::fs::symlink_metadata(&path) {
                                     if metadata.is_file() {
                                         std::fs::remove_file(&path)?;
@@ -351,19 +315,9 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     EntryKind::Directory => {
                         num_dirs += 1;
-                        let path = dir.join(entry_name);
-                        std::fs::create_dir_all(
-                            path.parent()
-                                .expect("all full entry paths should have parent paths"),
-                        )?;
                     }
                     EntryKind::File => {
                         num_files += 1;
-                        let path = dir.join(entry_name);
-                        std::fs::create_dir_all(
-                            path.parent()
-                                .expect("all full entry paths should have parent paths"),
-                        )?;
                         let mut entry_writer = File::create(path)?;
                         let before_entry_bytes = done_bytes;
                         let total = entry_reader.entry().uncompressed_size;
@@ -374,20 +328,16 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
                         let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
                         uncompressed_size += copied_bytes;
-                        done_bytes = before_entry_bytes + copied_bytes;
+                        done_bytes += copied_bytes;
                         entry_reader = progress_reader.into_inner();
                     }
                 }
 
-                match entry_reader.finish()? {
-                    Some(next_entry) => {
-                        entry_reader = next_entry;
-                    }
-                    None => {
-                        println!("End of archive!");
-                        break;
-                    }
-                }
+                let Some(next_entry) = entry_reader.finish()? else {
+                    println!("End of archive!");
+                    break;
+                };
+                entry_reader = next_entry;
             }
             pbar.finish();
             let duration = start_time.elapsed()?;
