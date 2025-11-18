@@ -284,10 +284,7 @@ fn extract_entry(
         }
         EntryKind::File => {
             let mut entry_writer = File::create(path)?;
-            let before_entry_bytes = stats.uncompressed_size;
-            let mut progress_reader = ProgressReader::new(entry_reader, |progress| {
-                pbar.set_position(before_entry_bytes + progress);
-            });
+            let mut progress_reader = ProgressReader::new(entry_reader, pbar.clone());
 
             let copied_bytes = io::copy(&mut progress_reader, &mut entry_writer)?;
             stats.uncompressed_size += copied_bytes;
@@ -345,32 +342,28 @@ impl Stats {
     }
 }
 
-struct ProgressReader<F, R> {
+struct ProgressReader<R> {
     inner: R,
-    callback: F,
-    progress: u64,
+    bar: ProgressBar,
 }
 
-impl<F, R> ProgressReader<F, R> {
-    fn new(inner: R, callback: F) -> Self {
+impl<R> ProgressReader<R> {
+    fn new(inner: R, bar: ProgressBar) -> Self {
         Self {
             inner,
-            callback,
-            progress: 0,
+            bar,
         }
     }
 }
 
-impl<F, R> io::Read for ProgressReader<F, R>
+impl<R> io::Read for ProgressReader<R>
 where
     R: io::Read,
-    F: Fn(u64),
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let res = self.inner.read(buf);
         if let Ok(n) = res {
-            self.progress += n as u64;
-            (self.callback)(self.progress);
+            self.bar.inc(n as u64);
         }
         res
     }
