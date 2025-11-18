@@ -81,19 +81,11 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
         for entry in archive.entries() {
             reader_versions.insert(entry.reader_version);
-            match entry.kind() {
-                EntryKind::Symlink => {
-                    stats.num_symlinks += 1;
-                }
-                EntryKind::Directory => {
-                    stats.num_dirs += 1;
-                }
-                EntryKind::File => {
-                    methods.insert(entry.method);
-                    stats.num_files += 1;
-                    compressed_size += entry.compressed_size;
-                    stats.uncompressed_size += entry.uncompressed_size;
-                }
+            stats.inc_kind(entry.kind());
+            if entry.kind() == EntryKind::File {
+                methods.insert(entry.method);
+                compressed_size += entry.compressed_size;
+                stats.uncompressed_size += entry.uncompressed_size;
             }
         }
         println!("Versions: {:?}", reader_versions);
@@ -162,9 +154,9 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let reader = zipfile.read_zip()?;
 
             let mut stats = Stats::default();
-            let uncompressed_size = reader.entries().map(|entry| entry.uncompressed_size).sum();
+            let total_uncompressed_size = reader.entries().map(|entry| entry.uncompressed_size).sum();
 
-            let pbar = ProgressBar::new(uncompressed_size);
+            let pbar = ProgressBar::new(total_uncompressed_size);
             pbar.set_style(
                 ProgressStyle::default_bar()
                     .template("{eta_precise} [{bar:20.cyan/blue}] {wide_msg}")
@@ -261,6 +253,7 @@ fn extract_entry(
     };
 
     pbar.set_message(entry_name.to_string());
+    stats.inc_kind(entry.kind());
     let path = dir.join(entry_name);
     std::fs::create_dir_all(
         path.parent()
@@ -268,8 +261,6 @@ fn extract_entry(
     )?;
     match entry.kind() {
         EntryKind::Symlink => {
-            stats.num_symlinks += 1;
-
             cfg_if! {
                 if #[cfg(windows)] {
                     let mut entry_writer = File::create(path)?;
@@ -292,11 +283,8 @@ fn extract_entry(
                 }
             }
         }
-        EntryKind::Directory => {
-            stats.num_dirs += 1;
-        }
+        EntryKind::Directory => {}
         EntryKind::File => {
-            stats.num_files += 1;
             let mut entry_writer = File::create(path)?;
             let before_entry_bytes = stats.uncompressed_size;
             let total = entry.uncompressed_size;
@@ -348,6 +336,16 @@ struct Stats {
     num_dirs: u32,
     num_symlinks: u32,
     uncompressed_size: u64,
+}
+
+impl Stats {
+    fn inc_kind(&mut self, kind: EntryKind) {
+        match kind {
+            EntryKind::File => self.num_files += 1,
+            EntryKind::Directory => self.num_dirs += 1,
+            EntryKind::Symlink => self.num_symlinks += 1,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
