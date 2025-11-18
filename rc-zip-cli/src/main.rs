@@ -38,6 +38,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    // TODO: rename to Info?
     File {
         zipfile: PathBuf,
     },
