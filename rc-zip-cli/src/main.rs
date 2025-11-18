@@ -9,10 +9,10 @@ use std::{
     borrow::Cow,
     collections::HashSet,
     fmt,
-    fs::File,
+    fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 struct Optional<T>(Option<T>);
@@ -167,7 +167,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             pbar.enable_steady_tick(Duration::from_millis(125));
 
-            let start_time = std::time::SystemTime::now();
+            let start_time = SystemTime::now();
             for entry in reader.entries() {
                 extract_entry(
                     entry.to_owned(),
@@ -201,7 +201,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             pbar.enable_steady_tick(Duration::from_millis(125));
 
-            let start_time = std::time::SystemTime::now();
+            let start_time = SystemTime::now();
 
             let mut entry_reader = zipfile.stream_zip_entries_throwing_caution_to_the_wind()?;
             loop {
@@ -239,7 +239,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
 fn extract_entry(
     entry: Entry,
-    entry_reader: &mut impl std::io::Read,
+    entry_reader: &mut impl io::Read,
     dir: &Path,
     pbar: &ProgressBar,
     stats: &mut Stats,
@@ -251,7 +251,7 @@ fn extract_entry(
     pbar.set_message(entry_name.to_string());
     stats.inc_kind(entry.kind());
     let path = dir.join(entry_name);
-    std::fs::create_dir_all(
+    fs::create_dir_all(
         path.parent()
             .expect("all full entry paths should have parent paths"),
     )?;
@@ -260,11 +260,11 @@ fn extract_entry(
             cfg_if! {
                 if #[cfg(windows)] {
                     let mut entry_writer = File::create(path)?;
-                    std::io::copy(&mut entry_reader, &mut entry_writer)?;
+                    io::copy(&mut entry_reader, &mut entry_writer)?;
                 } else {
-                    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+                    if let Ok(metadata) = fs::symlink_metadata(&path) {
                         if metadata.is_file() {
-                            std::fs::remove_file(&path)?;
+                            fs::remove_file(&path)?;
                         }
                     }
 
@@ -279,7 +279,9 @@ fn extract_entry(
                 }
             }
         }
-        EntryKind::Directory => {}
+        EntryKind::Directory => {
+            // TODO: make this directory too
+        }
         EntryKind::File => {
             let mut entry_writer = File::create(path)?;
             let before_entry_bytes = stats.uncompressed_size;
@@ -287,7 +289,7 @@ fn extract_entry(
                 pbar.set_position(before_entry_bytes + progress);
             });
 
-            let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
+            let copied_bytes = io::copy(&mut progress_reader, &mut entry_writer)?;
             stats.uncompressed_size += copied_bytes;
         }
     }
