@@ -2,7 +2,7 @@ use cfg_if::cfg_if;
 use clap::{Parser, Subcommand};
 use humansize::{format_size, BINARY};
 use indicatif::{ProgressBar, ProgressStyle};
-use rc_zip::parse::{Archive, EntryKind};
+use rc_zip::parse::{Archive, Entry, EntryKind};
 use rc_zip_sync::{ReadZip, ReadZipStreaming};
 
 use std::{
@@ -11,7 +11,7 @@ use std::{
     fmt,
     fs::File,
     io::{self, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -162,10 +162,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let reader = zipfile.read_zip()?;
 
             let mut stats = Stats::default();
-            let uncompressed_size = reader
-                .entries()
-                .map(|entry| entry.uncompressed_size)
-                .sum();
+            let uncompressed_size = reader.entries().map(|entry| entry.uncompressed_size).sum();
 
             let pbar = ProgressBar::new(uncompressed_size);
             pbar.set_style(
@@ -179,60 +176,13 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let start_time = std::time::SystemTime::now();
             for entry in reader.entries() {
-                let Some(entry_name) = entry.sanitized_name() else {
-                    continue;
-                };
-
-                pbar.set_message(entry_name.to_string());
-                let path = dir.join(entry_name);
-                std::fs::create_dir_all(
-                    path.parent()
-                        .expect("all full entry paths should have parent paths"),
+                extract_entry(
+                    entry.to_owned(),
+                    &mut entry.reader(),
+                    &dir,
+                    &pbar,
+                    &mut stats,
                 )?;
-                match entry.kind() {
-                    EntryKind::Symlink => {
-                        stats.num_symlinks += 1;
-
-                        cfg_if! {
-                            if #[cfg(windows)] {
-                                let mut entry_writer = File::create(path)?;
-                                let mut entry_reader = entry.reader();
-                                std::io::copy(&mut entry_reader, &mut entry_writer)?;
-                            } else {
-                                if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-                                    if metadata.is_file() {
-                                        std::fs::remove_file(&path)?;
-                                    }
-                                }
-
-                                let mut src = String::new();
-                                entry.reader().read_to_string(&mut src)?;
-
-                                // validate pointing path before creating a symbolic link
-                                if src.contains("..") {
-                                    continue;
-                                }
-                                std::os::unix::fs::symlink(src, &path)?;
-                            }
-                        }
-                    }
-                    EntryKind::Directory => {
-                        stats.num_dirs += 1;
-                    }
-                    EntryKind::File => {
-                        stats.num_files += 1;
-                        let mut entry_writer = File::create(path)?;
-                        let entry_reader = entry.reader();
-                        let before_entry_bytes = stats.uncompressed_size;
-                        let mut progress_reader =
-                            ProgressReader::new(entry_reader, entry.uncompressed_size, |prog| {
-                                pbar.set_position(before_entry_bytes + prog.done);
-                            });
-
-                        let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
-                        stats.uncompressed_size += copied_bytes;
-                    }
-                }
             }
             pbar.finish();
             let duration = start_time.elapsed()?;
@@ -267,60 +217,13 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let mut entry_reader = zipfile.stream_zip_entries_throwing_caution_to_the_wind()?;
             loop {
-                let Some(entry_name) = entry_reader.entry().sanitized_name() else {
-                    continue;
-                };
-
-                pbar.set_message(entry_name.to_string());
-                let path = dir.join(entry_name);
-                std::fs::create_dir_all(
-                    path.parent()
-                        .expect("all full entry paths should have parent paths"),
+                extract_entry(
+                    entry_reader.entry().to_owned(),
+                    &mut entry_reader,
+                    &dir,
+                    &pbar,
+                    &mut stats,
                 )?;
-                match entry_reader.entry().kind() {
-                    EntryKind::Symlink => {
-                        stats.num_symlinks += 1;
-
-                        cfg_if! {
-                            if #[cfg(windows)] {
-                                let mut entry_writer = File::create(path)?;
-                                std::io::copy(&mut entry_reader, &mut entry_writer)?;
-                            } else {
-                                if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-                                    if metadata.is_file() {
-                                        std::fs::remove_file(&path)?;
-                                    }
-                                }
-
-                                let mut src = String::new();
-                                entry_reader.read_to_string(&mut src)?;
-
-                                // validate pointing path before creating a symbolic link
-                                if src.contains("..") {
-                                    continue;
-                                }
-                                std::os::unix::fs::symlink(src, &path)?;
-                            }
-                        }
-                    }
-                    EntryKind::Directory => {
-                        stats.num_dirs += 1;
-                    }
-                    EntryKind::File => {
-                        stats.num_files += 1;
-                        let mut entry_writer = File::create(path)?;
-                        let before_entry_bytes = stats.uncompressed_size;
-                        let total = entry_reader.entry().uncompressed_size;
-                        let mut progress_reader =
-                            ProgressReader::new(entry_reader, total, |prog| {
-                                pbar.set_position(before_entry_bytes + prog.done);
-                            });
-
-                        let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
-                        stats.uncompressed_size += copied_bytes;
-                        entry_reader = progress_reader.into_inner();
-                    }
-                }
 
                 let Some(next_entry) = entry_reader.finish()? else {
                     println!("End of archive!");
@@ -340,6 +243,69 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let seconds = (duration.as_millis() as f64) / 1000.0;
             let bps = (stats.uncompressed_size as f64 / seconds) as u64;
             println!("Overall extraction speed: {} / s", format_size(bps, BINARY));
+        }
+    }
+
+    Ok(())
+}
+
+fn extract_entry(
+    entry: Entry,
+    entry_reader: &mut impl std::io::Read,
+    dir: &Path,
+    pbar: &ProgressBar,
+    stats: &mut Stats,
+) -> Result<(), rc_zip::error::Error> {
+    let Some(entry_name) = entry.sanitized_name() else {
+        return Ok(());
+    };
+
+    pbar.set_message(entry_name.to_string());
+    let path = dir.join(entry_name);
+    std::fs::create_dir_all(
+        path.parent()
+            .expect("all full entry paths should have parent paths"),
+    )?;
+    match entry.kind() {
+        EntryKind::Symlink => {
+            stats.num_symlinks += 1;
+
+            cfg_if! {
+                if #[cfg(windows)] {
+                    let mut entry_writer = File::create(path)?;
+                    std::io::copy(&mut entry_reader, &mut entry_writer)?;
+                } else {
+                    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+                        if metadata.is_file() {
+                            std::fs::remove_file(&path)?;
+                        }
+                    }
+
+                    let mut src = String::new();
+                    entry_reader.read_to_string(&mut src)?;
+
+                    // validate pointing path before creating a symbolic link
+                    if src.contains("..") {
+                        return Ok(());
+                    }
+                    std::os::unix::fs::symlink(src, &path)?;
+                }
+            }
+        }
+        EntryKind::Directory => {
+            stats.num_dirs += 1;
+        }
+        EntryKind::File => {
+            stats.num_files += 1;
+            let mut entry_writer = File::create(path)?;
+            let before_entry_bytes = stats.uncompressed_size;
+            let total = entry.uncompressed_size;
+            let mut progress_reader = ProgressReader::new(entry_reader, total, |prog| {
+                pbar.set_position(before_entry_bytes + prog.done);
+            });
+
+            let copied_bytes = std::io::copy(&mut progress_reader, &mut entry_writer)?;
+            stats.uncompressed_size += copied_bytes;
         }
     }
 
@@ -427,15 +393,5 @@ where
             (self.callback)(self.progress);
         }
         res
-    }
-}
-
-impl<F, R> ProgressReader<F, R>
-where
-    R: io::Read,
-    F: Fn(Progress),
-{
-    fn into_inner(self) -> R {
-        self.inner
     }
 }
