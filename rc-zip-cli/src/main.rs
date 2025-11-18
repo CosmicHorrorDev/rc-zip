@@ -154,7 +154,8 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let reader = zipfile.read_zip()?;
 
             let mut stats = Stats::default();
-            let total_uncompressed_size = reader.entries().map(|entry| entry.uncompressed_size).sum();
+            let total_uncompressed_size =
+                reader.entries().map(|entry| entry.uncompressed_size).sum();
 
             let pbar = ProgressBar::new(total_uncompressed_size);
             pbar.set_style(
@@ -196,12 +197,7 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let mut stats = Stats::default();
 
             let pbar = ProgressBar::new(100);
-            pbar.set_style(
-                ProgressStyle::default_bar()
-                    .template("{eta_precise} [{bar:20.cyan/blue}] {wide_msg}")
-                    .unwrap()
-                    .progress_chars("=>-"),
-            );
+            pbar.set_style(ProgressStyle::default_spinner());
 
             pbar.enable_steady_tick(Duration::from_millis(125));
 
