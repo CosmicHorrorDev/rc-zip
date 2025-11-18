@@ -214,12 +214,12 @@ fn do_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 )?;
 
                 let Some(next_entry) = entry_reader.finish()? else {
+                    // End of archive!
                     break;
                 };
                 entry_reader = next_entry;
             }
             pbar.finish();
-            println!("End of archive!");
             let duration = start_time.elapsed()?;
             println!(
                 "Extracted {} (in {} files, {} dirs, {} symlinks)",
